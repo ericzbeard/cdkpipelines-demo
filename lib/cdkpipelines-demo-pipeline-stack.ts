@@ -4,52 +4,70 @@ import { Construct, SecretValue, Stack, StackProps } from '@aws-cdk/core';
 import { CdkPipeline, SimpleSynthAction } from "@aws-cdk/pipelines";
 
 import { CdkpipelinesDemoStage } from './cdkpipelines-demo-stage';
+import { ShellScriptAction } from '@aws-cdk/pipelines';
 
 /**
  * The stack that defines the application pipeline
  */
 export class CdkpipelinesDemoPipelineStack extends Stack {
-  constructor(scope: Construct, id: string, props?: StackProps) {
-    super(scope, id, props);
+    constructor(scope: Construct, id: string, props?: StackProps) {
+        super(scope, id, props);
 
-    const sourceArtifact = new codepipeline.Artifact();
-    const cloudAssemblyArtifact = new codepipeline.Artifact();
- 
-    const pipeline = new CdkPipeline(this, 'Pipeline', {
-      // The pipeline name
-      pipelineName: 'MyServicePipeline',
-      cloudAssemblyArtifact,
+        const sourceArtifact = new codepipeline.Artifact();
+        const cloudAssemblyArtifact = new codepipeline.Artifact();
 
-      // Where the source can be found
-      sourceAction: new codepipeline_actions.GitHubSourceAction({
-        actionName: 'GitHub',
-        output: sourceArtifact,
-        oauthToken: SecretValue.secretsManager('github-token'),
-        owner: 'ericzbeard',
-        repo: 'cdkpipelines-demo',
-        trigger: codepipeline_actions.GitHubTrigger.POLL,
-      }),
+        const pipeline = new CdkPipeline(this, 'Pipeline', {
+            // The pipeline name
+            pipelineName: 'MyServicePipeline',
+            cloudAssemblyArtifact,
 
-       // How it will be built and synthesized
-       synthAction: SimpleSynthAction.standardNpmSynth({
-         sourceArtifact,
-         cloudAssemblyArtifact,
-         
-         // We need a build step to compile the TypeScript Lambda
-         buildCommand: 'npm run build'
-       }),
-    });
+            // Where the source can be found
+            sourceAction: new codepipeline_actions.GitHubSourceAction({
+                actionName: 'GitHub',
+                output: sourceArtifact,
+                oauthToken: SecretValue.secretsManager('github-token'),
+                owner: 'ericzbeard',
+                repo: 'cdkpipelines-demo',
+                trigger: codepipeline_actions.GitHubTrigger.POLL,
+            }),
 
-    // This is where we add the application stages
+            // How it will be built and synthesized
+            synthAction: SimpleSynthAction.standardNpmSynth({
+                sourceArtifact,
+                cloudAssemblyArtifact,
 
-    pipeline.addApplicationStage(new CdkpipelinesDemoStage(this, 'PreProd', {
-        env: { account: '509771036685', region: 'us-east-1' }
-      }));
+                // We need a build step to compile the TypeScript Lambda
+                buildCommand: 'npm run build'
+            }),
+        });
 
-    pipeline.addApplicationStage(new CdkpipelinesDemoStage(this, 'Prod', {
-        env: { account: '278978401551', region: 'us-east-1' }
-      }));
-  
-      
-  }
+        // This is where we add the application stages
+
+        const preprod = new CdkpipelinesDemoStage(this, 'PreProd', {
+            env: { account: '509771036685', region: 'us-east-1' }
+        });
+
+        const preprodStage = pipeline.addApplicationStage(preprod);
+        
+        preprodStage.addActions(new ShellScriptAction({
+            actionName: 'TestService',
+            useOutputs: {
+                // Get the stack Output from the Stage and make it available in
+                // the shell script as $ENDPOINT_URL.
+                ENDPOINT_URL: pipeline.stackOutput(preprod.urlOutput),
+            },
+            commands: [
+                // Use 'curl' to GET the given URL and fail it it returns an error
+                'curl -Ssf $ENDPOINT_URL',
+            ],
+        }));
+
+
+
+        pipeline.addApplicationStage(new CdkpipelinesDemoStage(this, 'Prod', {
+            env: { account: '278978401551', region: 'us-east-1' }
+        }));
+
+
+    }
 }
